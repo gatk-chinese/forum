@@ -1,0 +1,70 @@
+# 用VariantEval来评价找到的变异
+
+原文链接： [(howto) Evaluate a callset with VariantEval](https://www.broadinstitute.org/gatk/guide/article?id=6211)
+
+变异文件评价命令的翻译。
+
+## Related Documents
+
+- [Evaluating the quality of a variant callset](https://www.broadinstitute.org/gatk/guide/article?id=6308)
+- [(howto) Evaluate a callset with CollectVariantCallingMetrics](https://www.broadinstitute.org/gatk/guide/article?id=6186)
+
+## Context
+
+This document will walk you through use of GATK's VariantEval tool. VariantEval allows for a lot of customizability, enabling an enhanced analysis of your callset through stratification, use of additional evaluation modules, and the ability to pass in multiple truth sets. Your callset consists of variants identified by earlier steps in the [GATK best practices pipeline](https://www.broadinstitute.org/gatk/guide/best-practices), and now requires additional evaluation to determine where your callset falls on the spectrum of "perfectly identifies all true, biological variants" to "only identifies artifactual or otherwise unreal variants". When variant calling, we want the callset to maximize the correct calls, while minimizing false positive calls. While very robust methods, such as Sanger sequencing, can be used to individually sequence each potential variant, statistical analysis can be used to evaluate callsets instead, saving both time and money. These callset-based analyses are accomplished by comparing relevant metrics between your samples and a known truth set, such as dbSNP. Two tools exist to examine these metrics: VariantEval in GATK, and [CollectVariantCallingMetrics](https://www.broadinstitute.org/gatk/guide/article?id=6186) in Picard. While the latter is currently used in the Broad Institute's production pipeline, the merits to each tool, as well as the basis for variant evaluation, are discussed [here](https://www.broadinstitute.org/gatk/guide/article?id=6308).
+
+------
+
+## Example Analysis
+
+```
+java -jar GenomeAnalysisTK.jar \
+-T VariantEval \
+-R reference.b37.fasta \
+-eval SampleVariants.vcf \
+-D dbsnp_138.b37.excluding_sites_after_129.vcf \
+-noEV -EV CompOverlap -EV IndelSummary -EV TiTvVariantEvaluator -EV CountVariants -EV MultiallelicSummary \
+-o SampleVariants_Evaluation.eval.grp
+```
+
+This command specifies the tool ([VariantEval](https://www.broadinstitute.org/gatk/gatkdocs/org_broadinstitute_gatk_tools_walkers_varianteval_VariantEval.php)), input files, evaluation modules to be used, and an output file to write the results to. The output will be in the form of a [GATKReport](https://www.broadinstitute.org/gatk/guide/article?id=1244).
+
+### Input Files
+
+- `-eval`: a .vcf file containing your sample(s)' variant data you wish to evaluate. The example shown here uses a whole-genome sequenced rare variant association study performed on >1500 samples. You can specify multiple files to evaluate with additional `-eval` lines.
+- `-D`: a dbSNP .vcf to provide the tool a reference of known variants, which can be found in the [GATK bundle](https://www.broadinstitute.org/gatk/guide/article?id=1213)
+- `-R`: a reference sequence .fasta
+
+### Evaluation Modules
+
+For our example command, we will simplify our analysis and examine results using the following minimum standard modules: *CompOverlap*, *IndelSummary*, *TiTvVariantEvaluator*, *CountVariants*, & *MultiallelicSummary*. These modules will provide a reasonable assessment of variant qualities while reducing the computational burden in comparison to running the default modules. In the data we ran here, >1500 whole-genome-sequenced samples, this improved the run time by 5 hours and 20 minutes compared to using the default modules, which equates to a 12% time reduction. In order to do this, all default modules are removed with `-noEV`, then the minimum standard modules are added back in. This tool uses only at variants that have passed all filtration steps to calculate metrics.
+
+- **CompOverlap**: gives concordance metrics based on the overlap between the evaluation and comparison file
+- **CountVariants**: counts different types (SNP, insertion, complex, etc.) of variants present within your evaluation file and gives related metrics
+- **IndelSummary**: gives metrics related to insertions and deletions (count, multiallelic sites, het-hom ratios, etc.)
+- **MultiallelicSummary**: gives metrics relevant to multiallelic variant sites, including amount, ratio, and TiTv
+- **TiTvVariantEvaluator**: gives the number and ratio of transition and transversion variants for your evaluation file, comparison file, and ancestral alleles
+- **MetricsCollection**: includes all minimum metrics discussed in this article (the one you are currently reading). Runs by default if *CompOverlap*, *IndelSummary*, *TiTvVariantEvaluator*, *CountVariants*, & *MultiallelicSummary* are run as well. (included in the nightly build for immediate use or in the 3.5 release of GATK)
+
+### Example Output
+
+Here we see an example of the table generated by the *CompOverlap* evaluation module. The field `concordantRate`is highlighted as it is one of the metrics we examine for quality checks. Each table generated by the sample call is in the attached files list at the end of this document, which you are free to browse at your leisure.
+
+It is important to note the stratification by novelty, seen in this and all other tables for this example. The row for "novel" includes all variants that are found in `SampleVariants.vcf` but not found in the known variants file. By default, your known variants are in dbSNP. However, if you would like to specify a different known set of variants, you can pass in a `-comp` file, and call `-knownName` on it. (See the [VariantEval tool documentation](https://www.broadinstitute.org/gatk/gatkdocs/org_broadinstitute_gatk_tools_walkers_varianteval_VariantEval.php#--known_names) for more information) The "known" row includes all variants found in `SampleVariants.vcf` and the known variants file. "All" totals the "known" and "novel" rows. This novelty stratification is done by default, but many other stratifications can be specified; see tool documentation for more information.
+
+Compiled in the below table are all of the metrics taken from various tables that we will use to ascertain the quality of the analysis.
+
+### Metrics Analysis
+
+- **concordantRate** Referring to percent concordance, this metric is found in the *CompOverlap* table. The concordance given here is site-only; for concordance which also checks the genotype, use GenotypeConcordance from [Picard](https://broadinstitute.github.io/picard/picard-metric-definitions.html#GenotypeConcordanceDetailMetrics) or [GATK](https://www.broadinstitute.org/gatk/gatkdocs/org_broadinstitute_gatk_tools_walkers_variantutils_GenotypeConcordance.php) Your default truth set is dbSNP, though additional truth sets can be passed into VariantEval using the `-comp` argument.* In the case used here, we expect (and observe) a majority of overlap between eval and dbSNP. The latter contains a multitude of variants and is not highly regulated, so matching a high number of eval variants to it is quite likely. *Please note: As dbSNP is our default truth set (for comparison), and our default known (for novelty determination), you will see 0 in the novel concordantRate column. If you are interested in knowing the novel concordantRate, you must specify a truth set different from the set specified as known.
+- ![img](https://us.v-cdn.net/5019796/uploads/FileUpload/aa/b5f5b2bfa190da7edf3164fe841f64.png)**nSNPs/n_SNPs & nIndels/n_indels** The number of SNPs are given in *CountVariants*, *MultiallelicSummary*, and *IndelSummary*; the number of indels are given in *MultiallelicSummary* and *IndelSummary*. Different numbers are seen in each table for the same metric due to the way in which each table calculates the metric. Take the example to the right: each of the four samples give their two major alleles and though all samples have a variant at this particular loci, all are slightly different in their calls, making this a [multiallelic site](http://gatkforums.broadinstitute.org/discussion/6455/biallelic-vs-multiallelic-sites#latest). 
+  *IndelSummary* counts all variants separately at a multiallelic site; It thus counts 2 SNPs (one T and one C) and 1 indel (a deletion) across all samples. *CountVariants* and *MultiallelicSummary*, on the other hand, count multiallelic sites as a single variant, while still counting indels and SNPs as separate variants. Thus, they count one indel and one SNP. If you wanted to stratify by sample, all the tables would agree on the numbers for samples 1, 2, & 4, as they are [biallelic sites](http://gatkforums.broadinstitute.org/discussion/6455/biallelic-vs-multiallelic-sites#latest). Sample 3 is multiallelic, and *IndelSummary* would count 2 SNPs, whereas *CountVariants* and *MultiallleicSummary* would count 1 SNP. Though shown here on a very small scale, the same process occurs when analyzing a whole genome or exome of variants.
+  Our resulting numbers (~56 million SNPs & ~8-11 million indels) are for a cohort of >1500 whole-genome sequencing samples. Therefore, although the numbers are quite large in comparison to the ~4.4 million average variants found in [Nature's 2015 paper](http://www.nature.com/nature/journal/v526/n7571/full/nature15393.html), they are within reason for a large cohort of whole genome samples.
+- **Indel Ratio** The indel ratio is seen twice in our tables: as `insertion_to_deletion_ratio` under *IndelSummary*, and under *CountVariants* as `insertionDeletionRatio`. Each table gives a different ratio, due to the differences in calculating indels as discussed in the previous section. In our particular sample data set, filters were run to favor detection of more rare variants. Thus the indel ratios of the loci-based table (*IndelSummary*; 0.77 & 0.69) are closer to the rare ratio than the expected normal.
+- **tiTvRatio** While the *MultiallelicSummary* table gives a value for the TiTv of multiallelic sites, we are more interested in the overall TiTv, given by the *TiTvVariantEvaluator*. The value seen here (2.10 - 2.19) are on the higher edge of acceptable (2.0-2.1), but are still within reason.
+
+------
+
+## Note on speed performance
+
+The purpose of running the analysis with the minimum standard evaluation modules is to minimize the time spent running VariantEval. Reducing the number of evaluation modules has some effects on the total runtime; depending on the additional specifications given (stratifications, multiple `-comp` files, etc.), running with the minimum standard evaluation modules can reduce the runtime by 10-30% in comparison to running the default evaluation modules. Further reducing the runtime can be achieved through [multithreading](https://www.broadinstitute.org/gatk/guide/article?id=1975), using the `-nt` argument.
