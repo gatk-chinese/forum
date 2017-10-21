@@ -65,3 +65,92 @@ In this last section, we perform some refinement steps on the genotype calls (GQ
  
 
 The [Best Practices](http://www.broadinstitute.org/gatk/guide/best-practices) have been updated for GATK version 3. If you are running an older version, you should seriously consider upgrading. For more details about what has changed in each version, please see the [Version History](http://www.broadinstitute.org/gatk/guide/version-history) section. If you cannot upgrade your version of GATK for any reason, please look up the corresponding version of the GuideBook PDF (also in the [Version History](http://www.broadinstitute.org/gatk/guide/version-history) section) to ensure that you are using the appropriate recommendations for your version.
+
+
+# [GATK最佳实践-基于全基因组和外显子测序检测Germline SNP & INDEL](http://rogerdudler.github.io/git-guide/index.zh.html)
+
+## 一、分析流程图
+
+​	基于全基因组或者外显子测序数据检测Germline SNP & INDEL, GATK官方推荐使用最佳实践(Best Practices)，分析流程如下图所示，主要分为三个部分：预处理（PRE-PROCESSING）、发现变异(VARIANT DISCOVERY)和优化变异集(CALLSET REFINEMENT)。
+
+![img](https://software.broadinstitute.org/gatk/img/BP_workflow_3.6.png)
+
+## 二、预处理(PRE-PROCESSING)
+
+​	预处理过程是整理分析流程的第一步，是非常必须的。开始于FASTQ或者其他非BAM格式的文件，结束于用于第二步分析前的准备好的BAM文件。
+
+​	大多数情况下，我们得到的测序数据为FASTQ格式，对于一个样品来说可能有一个或多个FASTQ文件，这样的数据是不能直接用于变异检测分析的。即使得到的是BAM格式的文件,为了最大化的技术正确性，你可能仍然需要做一些数据处理。
+
+​	首先需要将测序的数据比对到参考基因组上，产生SAM/BAM格式的文件；其次标记重复reads 减少偏好性，这些重复的reads可能来源于PCR实验扩增；最后我们较正碱基的质量值，因为变异检测的算法非常依赖于每一个read中每一个碱基的质量分值。
+
+### 1.比对参考基因组(Map to Reference)与标记重复(Mark Duplicates)
+
+​	第一步我们首先将测序的reads比对到参考基因组上，产生SAM/BAM文件。对于DNA测序数据我们一般推荐BAW MEM，这个依赖于你的数据以及测序平台，你可以选择其他的比对工具。完成比对后，你需要确认比对结果是经过排序的。在这一过程中，你可以加入Read group的信息，也可以通过Picard AddOrReplaceReadGroups增加或者修改。
+
+​	完成基因组比对后，接下来是标记重复，在测序的过程中，相同的DNA片段可能被测到多次，产生的重复reads没有更多的信息，也不能用于作为支持变异信息的证据，标记重复的过程，不是将reads过滤，而只是在检测出来重复的read，并加上一个重复标签（TAG）的信息。多数的GATK工具默认情况下是不使用这些reads信息。
+
+​	这此过程中用到一些工具如BWA ,Picard 不属于GATK，所以我们不提供这些软件的详细文档，如果要了解更多，可以查看官网的文档页面。
+
+​	下面我们将介绍一步步介绍如何比对和标记。
+
+​	首先要保证测序数据是过滤了接头信息。（测序数据最好是经过质量过滤-译者）
+
+​	1.确定read分组信息
+
+​	read分组是下游GATK的关键信息，如果没有read的分组信息，GATK将不能正常使用，确保加入你所知道的read分组信息，更多信息可以查看SAM格式说明。
+
+如下格式：
+
+```
+@RG\tID:group1\tSM:sample1\tPL:illumina\tLB:lib1\tPU:unit1 
+```
+
+每一个元素之间使用“\t”分隔。
+
+​	2.生成read比对结果SAM文件
+
+​	使用BWA,命令行如下：
+
+```
+bwa mem -M -R ’<read group info>’ -p reference.fa raw_reads.fq > aligned_reads.sam 
+```
+
+‘<read group info>' 即为1中定义的read分组信息，-M参数可以将BAM比对的short split 比对结果作为第二个比对信息。
+
+​	结果文件为 aligned_reads.sam，包含了输入文件的信息，基因组的比对信息。我们使用的命令行是将Pairend fastq，合并在一个文件中，在比对其他格式的文件中需要适当调整命令行，具体可以阅读BWA 的使用文档。
+
+​	3.转为BAM，排序和标记重复
+
+​	这些预处理的操作过程是为了使数据适应GATK 工具。
+
+​	使用Picard将文件从SAM转为排序后BAM格式。
+
+```
+java -jar picard.jar SortSam \ 
+    INPUT=aligned_reads.sam \ 
+    OUTPUT=sorted_reads.bam \ 
+    SORT_ORDER=coordinate 
+```
+
+​	结果文件：sorted_reads.bam，此文件是根据位置坐标进行了排序，BAM文件是压缩后的文件，文件大小较SAM许多。
+
+​	使用Picard标记重复，命令如下：
+
+```
+java -jar picard.jar MarkDuplicates \ 
+    INPUT=sorted_reads.bam \ 
+    OUTPUT=dedup_reads.bam \
+    METRICS_FILE=metrics.txt
+```
+
+​	结果文件：dedup_reads.bam，这个文件格式同输入文件，只是标记了重复的reads。同时产生一个统计文件mertics.txt。
+
+​	使用Picard对标记重复的BAM文件建立索引，命令如下：
+
+```
+java -jar picard.jar BuildBamIndex \ 
+    INPUT=dedup_reads.bam 
+```
+
+​	结果文件:dup_reads.bam.bai
+
